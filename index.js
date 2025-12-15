@@ -4,6 +4,7 @@ const app = express();
 require('dotenv').config();
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const port =process.env.PORT || 3000
+const { ObjectId } = require('mongodb');
 
 // middleware
 
@@ -31,18 +32,188 @@ async function run() {
 
 const db = client.db('garments_order_db');
 const productsCollections = db.collection('products');
+const usersCollections = db.collection('users');
+const ordersCollections = db.collection('orders');
+
+// user api
+
+app.post('/users', async (req, res) => {
+  const user = req.body;
+
+  const result = await usersCollections.updateOne(
+    { email: user.email },
+    { $set: user },
+    { upsert: true }
+  );
+
+  res.send(result);
+});
+
+
+app.get('/users/role/:email', async (req, res) => {
+  const email = req.params.email;
+  const user = await usersCollections.findOne({ email });
+
+  res.send({ role: user?.role || 'buyer' });
+});
+
 
 // products api
 
-app.get('/products',async(req,res)=>{
-    
-})
+app.post('/products', async (req, res) => {
+  try {
+    const product = req.body;
+    product.createdAt = new Date();
 
-app.post('/products',async(req,res)=>{
-const product = req.body;
-const result = await productsCollections.insertOne(product);
-res.send(result)
-})
+    const result = await productsCollections.insertOne(product);
+    res.send(result);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({ message: "Product insert failed" });
+  }
+});
+
+// Get single product by ID
+app.get('/products/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const product = await productsCollections.findOne({ _id: new ObjectId(id) });
+
+    if (!product) {
+      return res.status(404).send({ message: "Product not found" });
+    }
+
+    res.send(product);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({ message: "Failed to fetch product" });
+  }
+});
+  
+
+
+app.get('/products', async (req, res) => {
+  const result = await productsCollections.find().toArray();
+  res.send(result);
+});
+
+
+app.get('/products/manager/:email', async (req, res) => {
+  const email = req.params.email;
+
+  const result = await productsCollections
+    .find({ managerEmail: email })
+    .toArray();
+
+  res.send(result);
+});
+
+
+app.put('/products/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedProduct = req.body;
+
+    const result = await productsCollections.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedProduct }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).send({ message: "Product not found or no changes made" });
+    }
+
+    res.send({ message: "Product updated successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Update failed" });
+  }
+});
+
+// delete route
+app.delete('/products/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const result = await productsCollections.deleteOne({
+      _id: new ObjectId(id), 
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ message: "Product not found" });
+    }
+
+    res.send({ message: "Product deleted successfully", result });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to delete product" });
+  }
+});
+// orders api(Create Order (Buyer)
+
+app.post('/orders', async (req, res) => {
+  const order = req.body;
+  order.status = 'Pending';
+  order.createdAt = new Date();
+
+  const result = await ordersCollections.insertOne(order);
+  res.send(result);
+});
+
+// Pending Orders (Manager)
+
+app.get('/orders/pending', async (req, res) => {
+  const result = await ordersCollections
+    .find({ status: 'Pending' })
+    .toArray();
+
+  res.send(result);
+});
+
+// approve order
+app.patch('/orders/approve/:id', async (req, res) => {
+  const id = req.params.id;
+
+  const result = await ordersCollections.updateOne(
+    { _id: new require('mongodb').ObjectId(id) },
+    {
+      $set: {
+        status: 'Approved',
+        approvedAt: new Date(),
+      },
+    }
+  );
+
+  res.send(result);
+});
+// reject order
+
+app.patch('/orders/reject/:id', async (req, res) => {
+  const id = req.params.id;
+
+  const result = await ordersCollections.updateOne(
+    { _id: new require('mongodb').ObjectId(id) },
+    { $set: { status: 'Rejected' } }
+  );
+
+  res.send(result);
+});
+// Add Tracking (Approved Orders)
+
+app.patch('/orders/tracking/:id', async (req, res) => {
+  const id = req.params.id;
+  const tracking = req.body;
+
+  const result = await ordersCollections.updateOne(
+    { _id: new require('mongodb').ObjectId(id) },
+    { $push: { tracking } }
+  );
+
+  res.send(result);
+});
+
+
+
 
     
     // Send a ping to confirm a successful connection
