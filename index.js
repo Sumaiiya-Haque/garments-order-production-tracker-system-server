@@ -104,6 +104,8 @@ app.get('/users/role/:email', async (req, res) => {
 });
 
 
+
+
 // products api
 
 app.post('/products', async (req, res) => {
@@ -196,6 +198,25 @@ app.delete('/products/:id', async (req, res) => {
   }
 });
 // orders api(Create Order (Buyer)
+
+
+app.get("/orders", async (req, res) => {
+  const email = req.query.email;
+
+  const orders = await ordersCollections
+    .find({ email: email }) 
+    .toArray();
+
+  res.send(orders);
+});
+
+
+app.get("/orders/admin", async (req, res) => {
+  const orders = await ordersCollection.find().toArray();
+  res.send(orders);
+});
+
+
 
 app.post('/orders', async (req, res) => {
   const order = req.body;
