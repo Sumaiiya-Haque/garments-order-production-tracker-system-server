@@ -3,7 +3,45 @@ const cors = require('cors')
 const app = express();
 require('dotenv').config();
 const { MongoClient, ServerApiVersion } = require('mongodb');
-const port =process.env.PORT || 3000
+const admin = require("firebase-admin");
+const port =process.env.PORT || 3000;
+
+
+
+
+
+// const serviceAccount = require("./garments-production-firebase-adminsdk.json");
+
+
+const verifyFirebaseToken = async(req,res,next)=>{
+  if(!req.headers.authorization){
+    return res.status(401).send({message:'unauthorized access'})
+  }
+  const token = req.headers.authorization.split(' ')[1];
+  if(!token){
+    return res.status(401).send({message:'unauthorized access'})
+  }
+
+  try{
+const userInfo = await admin.auth().verifyIdToken(token);
+console.log('after token validation',userInfo)
+  }catch{
+return res.status(401).send({message:'unauthorized access'})
+  }
+
+  next();
+}
+
+
+// const serviceAccount = require("./firebase-admin-key.json");
+
+// const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+// const serviceAccount = JSON.parse(decoded);
+
+// admin.initializeApp({
+//   credential: admin.credential.cert(serviceAccount)
+// });
+
 const { ObjectId } = require('mongodb');
 
 // middleware
@@ -37,17 +75,25 @@ const ordersCollections = db.collection('orders');
 
 // user api
 
-app.post('/users', async (req, res) => {
+app.post("/users", async (req, res) => {
   const user = req.body;
+  const { email } = user;
 
-  const result = await usersCollections.updateOne(
-    { email: user.email },
-    { $set: user },
-    { upsert: true }
-  );
+  const existingUser = await usersCollections.findOne({ email });
+  if (existingUser) {
+    return res.send({ message: "User already exists" });
+  }
 
+  const newUser = {
+    ...user,
+    status: "pending",
+    createdAt: new Date()
+  };
+
+  const result = await usersCollections.insertOne(newUser);
   res.send(result);
 });
+
 
 
 app.get('/users/role/:email', async (req, res) => {
@@ -217,8 +263,8 @@ app.patch('/orders/tracking/:id', async (req, res) => {
 
     
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
