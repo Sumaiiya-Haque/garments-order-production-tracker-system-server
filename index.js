@@ -75,6 +75,11 @@ const ordersCollections = db.collection('orders');
 
 // user api
 
+app.get("/users", async (req, res) => {
+  const users = await usersCollections.find().toArray();
+  res.send(users);
+});
+
 app.post("/users", async (req, res) => {
   const user = req.body;
   const { email } = user;
@@ -101,6 +106,18 @@ app.get('/users/role/:email', async (req, res) => {
   const user = await usersCollections.findOne({ email });
 
   res.send({ role: user?.role || 'buyer' });
+});
+
+app.patch("/users/role/:id", async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.body;
+
+  const result = await usersCollections.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { role } }
+  );
+
+  res.send(result);
 });
 
 
@@ -197,6 +214,20 @@ app.delete('/products/:id', async (req, res) => {
     res.status(500).send({ message: "Failed to delete product" });
   }
 });
+
+app.patch("/products/home/:id", async (req, res) => {
+  const id = req.params.id;
+  const { showOnHome } = req.body;
+
+  await productsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { showOnHome } }
+  );
+
+  res.send({ success: true });
+});
+
+
 // orders api(Create Order (Buyer)
 
 
