@@ -3,8 +3,12 @@ const cors = require('cors')
 const app = express();
 require('dotenv').config();
 const { MongoClient, ServerApiVersion } = require('mongodb');
-const admin = require("firebase-admin");
+// const admin = require("firebase-admin");
 const port =process.env.PORT || 3000;
+
+const Stripe = require("stripe");
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 
 
@@ -13,24 +17,96 @@ const port =process.env.PORT || 3000;
 // const serviceAccount = require("./garments-production-firebase-adminsdk.json");
 
 
-const verifyFirebaseToken = async(req,res,next)=>{
-  if(!req.headers.authorization){
-    return res.status(401).send({message:'unauthorized access'})
-  }
-  const token = req.headers.authorization.split(' ')[1];
-  if(!token){
-    return res.status(401).send({message:'unauthorized access'})
-  }
+// const verifyFirebaseToken = async (req, res, next) => {
+//   try {
+//     if (!req.headers.authorization) {
+//       return res.status(401).send({ message: "Unauthorized" });
+//     }
 
-  try{
-const userInfo = await admin.auth().verifyIdToken(token);
-console.log('after token validation',userInfo)
-  }catch{
-return res.status(401).send({message:'unauthorized access'})
+//     const token = req.headers.authorization.split(" ")[1];
+//     if (!token) {
+//       return res.status(401).send({ message: "Unauthorized" });
+//     }
+
+//     const decoded = await admin.auth().verifyIdToken(token);
+
+//     // 🔥 VERY IMPORTANT
+//     req.user = {
+//       email: decoded.email,
+//     };
+
+//     next();
+//   } catch (error) {
+//     return res.status(401).send({ message: "Unauthorized" });
+//   }
+// };
+
+const verifyAdmin = async (req, res, next) => {
+  const email = req.query.email || req.body.email;
+
+  const user = await usersCollections.findOne({ email });
+
+  if (user?.role !== "admin") {
+    return res.status(403).send({ message: "Admin only access" });
   }
 
   next();
-}
+};
+
+// const verifyManager = async (req, res, next) => {
+//   const email = req.query.email || req.body.email;
+
+//   const user = await usersCollections.findOne({ email });
+
+//   if (user?.role !== "manager") {
+//     return res.status(403).send({ message: "Manager only access" });
+//   }
+
+//   next();
+// };
+
+
+
+
+
+const verifyManager = async (req, res, next) => {
+  const email = req.headers.email || req.query.email || req.body.email;
+
+  if (!email) {
+    return res.status(401).send({ message: "Email required" });
+  }
+
+  const user = await usersCollections.findOne({ email });
+
+  if (user?.role !== "manager" || user?.status !== "approved") {
+    return res.status(403).send({ message: "Approved manager only" });
+  }
+
+  req.managerEmail = email;
+  next();
+};
+
+module.exports = verifyManager;
+
+
+
+
+
+
+
+
+// const verifyManager = async (req, res, next) => {
+//   const email = req.user.email;
+
+//   const user = await usersCollections.findOne({ email });
+
+//   if (user?.role !== "manager") {
+//     return res.status(403).send({ message: "Manager only access" });
+//   }
+
+//   next();
+// };
+
 
 
 // const serviceAccount = require("./firebase-admin-key.json");
@@ -66,7 +142,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
 const db = client.db('garments_order_db');
 const productsCollections = db.collection('products');
@@ -75,10 +151,16 @@ const ordersCollections = db.collection('orders');
 
 // user api
 
-app.get("/users", async (req, res) => {
-  const users = await usersCollections.find().toArray();
-  res.send(users);
-});
+app.get(
+  "/users",
+  // verifyFirebaseToken,
+  verifyAdmin,
+  async (req, res) => {
+    const users = await usersCollections.find().toArray();
+    res.send(users);
+  }
+);
+
 
 app.post("/users", async (req, res) => {
   const user = req.body;
@@ -108,13 +190,17 @@ app.get('/users/role/:email', async (req, res) => {
   res.send({ role: user?.role || 'buyer' });
 });
 
-app.patch("/users/role/:id", async (req, res) => {
-  const { id } = req.params;
-  const { role } = req.body;
+app.patch("/users/approve/:id", async (req, res) => {
+  const id = req.params.id;
 
   const result = await usersCollections.updateOne(
     { _id: new ObjectId(id) },
-    { $set: { role } }
+    {
+      $set: {
+        role: "manager",
+        status: "approved",
+      },
+    }
   );
 
   res.send(result);
@@ -125,18 +211,50 @@ app.patch("/users/role/:id", async (req, res) => {
 
 // products api
 
-app.post('/products', async (req, res) => {
-  try {
-    const product = req.body;
-    product.createdAt = new Date();
 
-    const result = await productsCollections.insertOne(product);
-    res.send(result);
-  } catch (error) {
-    console.log(error);
-    res.status(500).send({ message: "Product insert failed" });
+app.get("/products", async (req, res) => {
+  const search = req.query.search;
+
+  let query = {};
+
+  if (search) {
+    query = {
+      name: { $regex: search, $options: "i" },
+    };
   }
+
+  const result = await productsCollections.find(query).toArray();
+  res.send(result);
 });
+
+app.post("/products", verifyManager, async (req, res) => {
+  const product = req.body;
+
+  const newProduct = {
+    ...product,
+    createdBy: req.managerEmail,
+    createdAt: new Date(),
+  };
+
+  const result = await productsCollections.insertOne(newProduct);
+  res.send(result);
+});
+
+app.get(
+  "/products/manager",
+  // verifyFirebaseToken,
+  verifyManager,
+  async (req, res) => {
+    const email = req.query.email;
+
+    const result = await productsCollections
+      .find({ createdBy: email })
+      .toArray();
+
+    res.send(result);
+  }
+);
+
 
 // Get single product by ID
 app.get('/products/:id', async (req, res) => {
@@ -157,10 +275,7 @@ app.get('/products/:id', async (req, res) => {
   
 
 
-app.get('/products', async (req, res) => {
-  const result = await productsCollections.find().toArray();
-  res.send(result);
-});
+
 
 
 app.get('/products/manager/:email', async (req, res) => {
@@ -174,52 +289,67 @@ app.get('/products/manager/:email', async (req, res) => {
 });
 
 
-app.put('/products/:id', async (req, res) => {
-  try {
+app.put(
+  "/products/:id",
+  // verifyFirebaseToken,
+  verifyManager,
+  async (req, res) => {
     const id = req.params.id;
-    const updatedProduct = req.body;
+    const email = req.user.email;
 
-    const result = await productsCollections.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updatedProduct }
-    );
-
-    if (result.modifiedCount === 0) {
-      return res.status(404).send({ message: "Product not found or no changes made" });
-    }
-
-    res.send({ message: "Product updated successfully" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Update failed" });
-  }
-});
-
-// delete route
-app.delete('/products/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    const result = await productsCollections.deleteOne({
-      _id: new ObjectId(id), 
+    const product = await productsCollections.findOne({
+      _id: new ObjectId(id),
     });
 
-    if (result.deletedCount === 0) {
+    if (!product) {
       return res.status(404).send({ message: "Product not found" });
     }
 
-    res.send({ message: "Product deleted successfully", result });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to delete product" });
+    if (product.createdBy !== email) {
+      return res.status(403).send({ message: "Not your product" });
+    }
+
+    const result = await productsCollections.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: req.body }
+    );
+
+    res.send(result);
   }
-});
+);
+
+
+// delete route
+app.delete(
+  "/products/:id",
+  // verifyFirebaseToken,
+  verifyManager,
+  async (req, res) => {
+    const id = req.params.id;
+    const email = req.user.email;
+
+    const product = await productsCollections.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (product.createdBy !== email) {
+      return res.status(403).send({ message: "Not your product" });
+    }
+
+    const result = await productsCollections.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  }
+);
+
 
 app.patch("/products/home/:id", async (req, res) => {
   const id = req.params.id;
   const { showOnHome } = req.body;
 
-  await productsCollection.updateOne(
+  await productsCollections.updateOne(
     { _id: new ObjectId(id) },
     { $set: { showOnHome } }
   );
@@ -231,42 +361,96 @@ app.patch("/products/home/:id", async (req, res) => {
 // orders api(Create Order (Buyer)
 
 
-app.get("/orders", async (req, res) => {
-  const email = req.query.email;
+app.get(
+  "/orders",
+  // verifyFirebaseToken,
+  async (req, res) => {
+    const email = req.query.email;
 
-  const orders = await ordersCollections
-    .find({ email: email }) 
-    .toArray();
-
-  res.send(orders);
-});
-
-
-app.get("/orders/admin", async (req, res) => {
-  const orders = await ordersCollection.find().toArray();
-  res.send(orders);
-});
+    const orders = await ordersCollections.find({ email }).toArray();
+    res.send(orders);
+  }
+);
 
 
+app.get(
+  "/orders/admin",
+  // verifyFirebaseToken,
+  verifyAdmin,
+  async (req, res) => {
+    const orders = await ordersCollections.find().toArray();
+    res.send(orders);
+  }
+);
 
-app.post('/orders', async (req, res) => {
-  const order = req.body;
-  order.status = 'Pending';
-  order.createdAt = new Date();
+
+
+// app.post('/orders', async (req, res) => {
+//   const order = req.body;
+//   order.status = 'Pending';
+//   order.createdAt = new Date();
+
+//   const result = await ordersCollections.insertOne(order);
+//   res.send(result);
+// });
+
+// app.post('/orders', async (req, res) => {
+//   const order = {
+//     ...req.body,
+//     status: req.body.paymentMethod === 'PayFirst' ? 'Approved' : 'Pending',
+//     createdAt: new Date(),
+//   };
+//   const result = await ordersCollections.insertOne(order);
+//   res.send(result);
+// });
+
+app.post("/orders", async (req, res) => {
+  const order = {
+    ...req.body,
+    createdAt: new Date(),
+  };
 
   const result = await ordersCollections.insertOne(order);
   res.send(result);
 });
 
+
+
+// create payment 
+
+
+app.post("/create-payment-intent", async (req, res) => {
+  const { amount } = req.body;
+
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amount * 100,
+    currency: "usd",
+  });
+
+  res.send({ clientSecret: paymentIntent.client_secret });
+});
+
+
 // Pending Orders (Manager)
 
-app.get('/orders/pending', async (req, res) => {
-  const result = await ordersCollections
-    .find({ status: 'Pending' })
-    .toArray();
+app.get(
+  "/orders/pending",
+  // verifyFirebaseToken,
+  verifyManager,
+  async (req, res) => {
+    const email = req.user.email;
 
-  res.send(result);
-});
+    const result = await ordersCollections
+      .find({
+        status: "Pending",
+        managerEmail: email,
+      })
+      .toArray();
+
+    res.send(result);
+  }
+);
+
 
 // approve order
 app.patch('/orders/approve/:id', async (req, res) => {
